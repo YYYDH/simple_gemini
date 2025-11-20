@@ -75,7 +75,8 @@ if user_input or uploaded_files:
 
             if f.type.startswith("image"):
                 img = Image.open(io.BytesIO(bytes_data))
-                api_payload.append(genai.types.InputImage.from_pil(img))
+                # 直接传 PIL.Image，google-genai 会自动处理
+                api_payload.append(img)
                 display_content.append({"type": "image", "data": img, "caption": f.name})
             else:
                 text = bytes_data.decode("utf-8", errors="ignore")
