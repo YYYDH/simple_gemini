@@ -217,6 +217,5 @@ if api_key:
             except Exception as e:
                 st.error(f"API 调用失败：{str(e)}")
 else:
-    # 未输入 API Key 时提示
+    st.info("👈 请在左侧边栏配置你的 Google Gemini API Key 以开始聊天")
     st.chat_input("请先在侧边栏输入 Gemini API Key", disabled=True)
-    st.warning("请在侧边栏配置你的 Google Gemini API Key 以开始聊天")
