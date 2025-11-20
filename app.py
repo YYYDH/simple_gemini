@@ -1,136 +1,79 @@
 import streamlit as st
-from google import genai
-from PIL import Image
-import io
+from google.generativeai import GenerativeModel, configure
 
-# ----------------- 页面设置 -----------------
-st.set_page_config(page_title="Gemini 多模态聊天", page_icon="🤖", layout="wide")
-st.title("🤖 Gemini 多模态聊天助手")
-st.caption("支持文本 + 图片 + 文件（google-genai 最新 SDK）")
+# 页面配置
+st.set_page_config(
+    page_title="Gemini AI 聊天",
+    page_icon="🤖",
+    layout="wide"
+)
 
-# ----------------- 侧边栏 -----------------
+# 标题和说明
+st.title("🤖 Gemini AI 聊天助手")
+st.caption("基于 Google Gemini API 的简单聊天工具，支持多模型选择")
+
+# 1. 配置 Gemini API Key（用户需在侧边栏输入）
 with st.sidebar:
     st.header("🔧 配置")
+    api_key = st.text_input("请输入你的 Google Gemini API Key", type="password")
+    st.caption("API Key 可从 [Google AI Studio](https://aistudio.google.com/) 获取")
 
-    api_key = st.text_input("请输入 Gemini API Key", type="password")
-
+    # 模型选择下拉框（默认 gemini-2.5-pro）
     models = [
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
+        "gemini-2.5-pro",
+        "gemini-2.5-pro-latest",
         "gemini-1.5-pro",
+        "gemini-1.5-flash",
         "gemini-pro"
     ]
-    selected_model = st.selectbox("选择模型", models, index=0)
+    selected_model = st.selectbox("选择模型", models, index=0)  # index=0 设为默认
 
-    if st.button("🗑 清空对话"):
+    # 清空聊天记录按钮
+    if st.button("🗑️ 清空聊天记录"):
         st.session_state.messages = []
         st.rerun()
 
-# ----------------- 初始化会话状态 -----------------
+# 2. 初始化聊天记录（用 Streamlit 会话状态存储，页面刷新不丢失）
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# ----------------- 展示历史消息 -----------------
+# 3. 显示历史聊天记录
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
-        content = msg["content"]
-        if isinstance(content, str):
-            st.markdown(content)
-        else:
-            for part in content:
-                if part["type"] == "text":
-                    st.markdown(part["data"])
-                elif part["type"] == "image":
-                    st.image(part["data"], caption=part.get("caption"))
-                elif part["type"] == "file":
-                    st.info(f"📄 文件: {part['name']}")
+        st.markdown(msg["content"])
 
-# ----------------- 无 API Key 时停止 -----------------
-if not api_key:
-    st.info("👈 请在左侧输入 API Key")
-    st.chat_input("请先输入 API Key", disabled=True)
-    st.stop()
+# 4. 处理用户输入和 AI 响应
+if api_key:
+    # 配置 Gemini API
+    configure(api_key=api_key)
+    model = GenerativeModel(selected_model)
 
-# ----------------- 创建 Gemini 客户端 -----------------
-client = genai.Client(api_key=api_key)
-
-# ----------------- 上传文件 + 输入框 -----------------
-uploaded_files = st.file_uploader(
-    "✨ 上传附件（不会自动发送）",
-    accept_multiple_files=True,
-    type=[
-        "jpg", "jpeg", "png", "gif",
-        "txt", "md", "json", "py"
-    ]
-)
-
-user_input = st.chat_input("请输入你的消息...")
-
-# ----------------- 处理用户输入 -----------------
-if user_input or uploaded_files:
-
-    display_content = []
-    api_payload = []
-
-    # ------ 文件处理 ------
-    if uploaded_files:
-        for f in uploaded_files:
-            data = f.getvalue()
-
-            if f.type.startswith("image"):
-                img = Image.open(io.BytesIO(data))
-                display_content.append({"type": "image", "data": img, "caption": f.name})
-                api_payload.append(img)
-            else:
-                text = data.decode("utf-8", errors="ignore")
-                display_content.append({"type": "file", "name": f.name, "data": text})
-                api_payload.append(f"文件 `{f.name}` 内容：\n\n{text}")
-
-    # ------ 文本处理 ------
+    # 用户输入框
+    user_input = st.chat_input("请输入你的问题...")
     if user_input:
-        display_content.append({"type": "text", "data": user_input})
-        api_payload.append(user_input)
+        # 添加用户消息到会话状态
+        st.session_state.messages.append({"role": "user", "content": user_input})
+        with st.chat_message("user"):
+            st.markdown(user_input)
 
-    # 保存用户消息
-    st.session_state.messages.append({
-        "role": "user",
-        "content": display_content
-    })
+        # 生成 AI 响应
+        with st.chat_message("assistant"):
+            message_placeholder = st.empty()
+            full_response = ""
 
-    # 展示用户消息
-    with st.chat_message("user"):
-        for part in display_content:
-            if part["type"] == "text":
-                st.markdown(part["data"])
-            elif part["type"] == "image":
-                st.image(part["data"], width=200)
-            elif part["type"] == "file":
-                st.info(f"📄 文件: {part['name']}")
-
-    # ----------------- AI 回复 -----------------
-    with st.chat_message("assistant"):
-        placeholder = st.empty()
-        full_text = ""
-
-        try:
-            # 正确的流式 API（适配 google-genai）
-            stream = client.models.generate_content_stream(
-                model=selected_model,
-                contents=api_payload,
-            )
-
-            for chunk in stream:
-                if chunk.text:
-                    full_text += chunk.text
-                    placeholder.markdown(full_text + "▌")
-
-            placeholder.markdown(full_text)
-
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": full_text
-            })
-
-        except Exception as e:
-            st.error(f"API 调用失败：{e}")
+            # 调用 Gemini API（流式响应，实时显示）
+            try:
+                response = model.generate_content(user_input, stream=True)
+                for chunk in response:
+                    if chunk.text:
+                        full_response += chunk.text
+                        message_placeholder.markdown(full_response + "▌")  # 加载动画
+                message_placeholder.markdown(full_response)  # 最终响应
+                # 保存 AI 响应到会话状态
+                st.session_state.messages.append({"role": "assistant", "content": full_response})
+            except Exception as e:
+                st.error(f"API 调用失败：{str(e)}")
+else:
+    # 未输入 API Key 时提示
+    st.chat_input("请先在侧边栏输入 Gemini API Key", disabled=True)
+    st.warning("请在侧边栏配置你的 Google Gemini API Key 以开始聊天")
