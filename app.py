@@ -17,7 +17,6 @@ st.caption("基于 Google Gemini API，支持文本、图片和代码文件输�
 with st.sidebar:
     st.header("🔧 配置")
 
-    # 1. 获取 API Key（优先从 secrets）
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
         st.success("已成功加载 API Key！")
@@ -27,7 +26,6 @@ with st.sidebar:
 
     st.caption("API Key 可从 Google AI Studio 获取")
 
-    # 2. 选择模型
     models = [
         "gemini-1.5-pro-latest",
         "gemini-1.5-flash-latest",
@@ -35,6 +33,77 @@ with st.sidebar:
         "gemini-pro"
     ]
     selected_model = st.selectbox("选择模型", models, index=0)
+
+    if st.button("🗑️ 清空聊天记录"):
+        st.session_state.messages = []
+        st.rerun()
+
+# ---------------- 初始化聊天记录 ----------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# ---------------- 显示历史消息 ----------------
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        if isinstance(msg["content"], str):
+            st.markdown(msg["content"])
+        else:
+            for part in msg["content"]:
+                if part["type"] == "text":
+                    st.markdown(part["data"])
+                elif part["type"] == "image":
+                    st.image(part["data"], caption=part.get("caption", "上传的图片"), use_column_width=True)
+                elif part["type"] == "file":
+                    st.info(f"📄 上传文件 `{part['name']}`")
+
+# ---------------- API 配置 ----------------
+model = None
+if api_key:
+    try:
+        configure(api_key=api_key)
+        model = GenerativeModel(selected_model)
+    except Exception as e:
+        st.error(f"API Key 配置失败：{e}")
+        model = None
+
+# ---------------- 文件上传（独立于 chat_input） ----------------
+uploaded_files = st.file_uploader(
+    "✨ 上传附件（图片、文本、代码文件等）",
+    accept_multiple_files=True,
+    type=['jpg', 'jpeg', 'png', 'gif', 'py', 'txt', 'md', 'json', 'html', 'css', 'js']
+)
+
+# ---------------- 输入框放在页面最底部 ----------------
+user_input = st.chat_input(
+    "请输入你的问题..." if api_key else "请先在左侧输入 API Key",
+    disabled=not api_key
+)
+
+# 若没 API Key，停止逻辑 —— 输入框仍正常显示在底部
+if not api_key:
+    st.stop()
+
+# ------------------------------------------------------
+# 下面是处理对话逻辑（仅当 API Key 存在时运行）
+# ------------------------------------------------------
+
+if user_input or uploaded_files:
+
+    user_msg_for_api = []
+    user_msg_display = []
+
+    # 处理文件
+    if uploaded_files:
+        for file in uploaded_files:
+            file_bytes = file.getvalue()
+
+            if file.type.startswith("image/"):
+                img = PIL.Image.open(io.BytesIO(file_bytes))
+                user_msg_for_api.append(img)
+                user_msg_display.append({
+                    "type": "image",
+                    "data": img,
+                    "c    selected_model = st.selectbox("选择模型", models, index=0)
 
     # 3. 清空聊天记录
     if st.button("🗑️ 清空聊天记录"):
