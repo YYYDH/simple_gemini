@@ -1,143 +1,129 @@
 import streamlit as st
 from google import genai
-import google.ai.generativelanguage as glm
+from PIL import Image
+import io
 
-# -------------------------------
-# Streamlit 页面设置
-# -------------------------------
-st.set_page_config(
-    page_title="Gemini AI Chat",
-    page_icon="🤖",
-    layout="wide"
-)
+st.set_page_config(page_title="Gemini Chat", page_icon="🤖", layout="wide")
 
-# 初始化消息记录
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+st.title("🤖 Gemini 多模态聊天助手")
+st.caption("支持文本 + 图片 + 文件，基于 google-genai 新版 SDK")
 
-# -------------------------------
-# 侧边栏配置
-# -------------------------------
+# ---------------- Sidebar ----------------
 with st.sidebar:
     st.header("🔧 配置")
 
-    # API Key 处理
-    try:
-        api_key = st.secrets["GEMINI_API_KEY"]
-        st.success("已成功加载 API Key！")
-    except Exception:
-        st.warning("未找到 GEMINI_API_KEY，请手动输入。")
-        api_key = st.text_input("请输入你的 Google Gemini API Key", type="password")
-
-    st.caption("API Key 可从 Google AI Studio 获取")
-
-    # 模型选择（包含 2.5）
+    api_key = st.text_input("请输入 Gemini API Key", type="password")
     models = [
-        "gemini-2.5-pro",
-        "gemini-2.5-pro-latest",
-        "gemini-1.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
         "gemini-1.5-flash",
+        "gemini-1.5-pro",
         "gemini-pro"
     ]
-
     selected_model = st.selectbox("选择模型", models, index=0)
 
-    # 清空对话
-    if st.button("🗑️ 清空聊天记录"):
+    if st.button("🗑 清空对话"):
         st.session_state.messages = []
         st.rerun()
 
-# 无 API Key 时阻止继续
-if not api_key:
-    st.info("👈 请在左侧边栏输入 API Key 以开始聊天")
-    st.stop()
+# ---------------- Init ----------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-# -------------------------------
-# 初始化 Gemini 客户端
-# -------------------------------
-client = genai.Client(api_key=api_key)
-
-# -------------------------------
-# 主界面标题
-# -------------------------------
-st.title("🤖 Gemini AI 多模态聊天助手")
-st.caption("支持文本、图片、代码文件输入")
-
-# -------------------------------
-# 展示历史消息
-# -------------------------------
+# ---------------- Chat history ----------------
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         if isinstance(msg["content"], str):
             st.markdown(msg["content"])
-        elif isinstance(msg["content"], list):  # 文件 + 文本组合
-            for x in msg["content"]:
-                if x["type"] == "text":
-                    st.markdown(x["text"])
-                elif x["type"] == "image":
-                    st.image(x["image"], caption="用户上传的图片")
+        else:
+            for part in msg["content"]:
+                if part["type"] == "text":
+                    st.markdown(part["data"])
+                elif part["type"] == "image":
+                    st.image(part["data"], caption=part.get("caption"))
+                elif part["type"] == "file":
+                    st.info(f"📄 文件: {part['name']}")
 
+# Stop if no key
+if not api_key:
+    st.info("👈 请在左侧输入 API Key")
+    st.chat_input("请先输入 API Key", disabled=True)
+    st.stop()
 
-# -------------------------------
-# 底部输入框：全页面固定在底部
-# -------------------------------
-# 上传文件（不自动发送）
+# Create client
+client = genai.Client(api_key=api_key)
+
+# ---------------- File uploads + chat input ----------------
 uploaded_files = st.file_uploader(
-    "📎 上传图片或文件（不会自动发送）",
-    type=["png", "jpg", "jpeg", "webp", "gif", "txt", "md", "py", "json"],
-    accept_multiple_files=True
+    "✨ 上传附件（不会自动发送，直到你按回车）",
+    accept_multiple_files=True,
+    type=['jpg', 'jpeg', 'png', 'gif', 'txt', 'md', 'json', 'py']
 )
 
-# 输入框（在页面最底部）
-user_text = st.chat_input("请输入你的消息...")
+user_input = st.chat_input("请输入你的内容...")
 
-# -------------------------------
-# 用户按“发送”后触发
-# -------------------------------
-if user_text or uploaded_files:
-    final_payload = []
+# ---------------- Handle user message ----------------
+if user_input or uploaded_files:
 
-    # 添加文本
-    if user_text:
-        final_payload.append({"type": "text", "text": user_text})
+    display_content = []
+    api_payload = []
 
-    # 添加图片或其他文件
-    for f in uploaded_files or []:
-        if f.type.startswith("image/"):
-            final_payload.append({
-                "type": "image",
-                "image": f.read()
-            })
-        else:
-            text = f"（文件：{f.name}）\n\n```\n{f.read().decode('utf-8')}\n```"
-            final_payload.append({"type": "text", "text": text})
+    # 文件处理
+    if uploaded_files:
+        for f in uploaded_files:
+            bytes_data = f.getvalue()
 
-    # 记录到对话
-    st.session_state.messages.append({"role": "user", "content": final_payload})
+            if f.type.startswith("image"):
+                img = Image.open(io.BytesIO(bytes_data))
+                api_payload.append(genai.types.InputImage.from_pil(img))
+                display_content.append({"type": "image", "data": img, "caption": f.name})
+            else:
+                text = bytes_data.decode("utf-8", errors="ignore")
+                api_payload.append(f"文件 `{f.name}` 内容：\n\n{text}")
+                display_content.append({"type": "file", "name": f.name, "data": text})
+
+    # 文本部分
+    if user_input:
+        api_payload.append(user_input)
+        display_content.append({"type": "text", "data": user_input})
+
+    # 保存用户消息
+    st.session_state.messages.append({"role": "user", "content": display_content})
 
     # 显示用户消息
     with st.chat_message("user"):
-        for item in final_payload:
-            if item["type"] == "text":
-                st.markdown(item["text"])
-            elif item["type"] == "image":
-                st.image(item["image"])
+        for part in display_content:
+            if part["type"] == "text":
+                st.markdown(part["data"])
+            elif part["type"] == "image":
+                st.image(part["data"], width=200)
+            elif part["type"] == "file":
+                st.info(f"📄 文件: {part['name']}")
 
-    # -------------------------------
-    # 调用 Gemini 模型
-    # -------------------------------
+    # ---------------- AI 回复 ----------------
     with st.chat_message("assistant"):
-        msg = client.models.generate_content(
-            model=selected_model,
-            contents=final_payload,
-            generation_config=glm.GenerationConfig(temperature=0.7)
-        )
+        placeholder = st.empty()
+        full_text = ""
 
-        reply = msg.text
-        st.markdown(reply)
+        try:
+            # 流式输出
+            stream = client.models.generate_content(
+                model=selected_model,
+                contents=api_payload,
+                stream=True,
+            )
 
-        # 保存
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": reply
-        })
+            for chunk in stream:
+                if chunk.text:
+                    full_text += chunk.text
+                    placeholder.markdown(full_text + "▌")
+
+            placeholder.markdown(full_text)
+
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": full_text
+            })
+
+        except Exception as e:
+            st.error(f"API 调用失败：{e}")
