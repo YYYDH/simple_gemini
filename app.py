@@ -31,14 +31,14 @@ with st.sidebar:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-
 # ----------------- 展示历史消息 -----------------
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
-        if isinstance(msg["content"], str):
-            st.markdown(msg["content"])
+        content = msg["content"]
+        if isinstance(content, str):
+            st.markdown(content)
         else:
-            for part in msg["content"]:
+            for part in content:
                 if part["type"] == "text":
                     st.markdown(part["data"])
                 elif part["type"] == "image":
@@ -46,21 +46,18 @@ for msg in st.session_state.messages:
                 elif part["type"] == "file":
                     st.info(f"📄 文件: {part['name']}")
 
-
 # ----------------- 无 API Key 时停止 -----------------
 if not api_key:
     st.info("👈 请在左侧输入 API Key")
     st.chat_input("请先输入 API Key", disabled=True)
     st.stop()
 
-
 # ----------------- 创建 Gemini 客户端 -----------------
 client = genai.Client(api_key=api_key)
 
-
 # ----------------- 上传文件 + 输入框 -----------------
 uploaded_files = st.file_uploader(
-    "✨ 上传附件（图片、代码、文本等） - 注意：不会自动发送",
+    "✨ 上传附件（不会自动发送）",
     accept_multiple_files=True,
     type=[
         "jpg", "jpeg", "png", "gif",
@@ -70,14 +67,13 @@ uploaded_files = st.file_uploader(
 
 user_input = st.chat_input("请输入你的消息...")
 
-
 # ----------------- 处理用户输入 -----------------
 if user_input or uploaded_files:
 
     display_content = []
     api_payload = []
 
-    # --- 文件处理 ---
+    # ------ 文件处理 ------
     if uploaded_files:
         for f in uploaded_files:
             data = f.getvalue()
@@ -85,20 +81,24 @@ if user_input or uploaded_files:
             if f.type.startswith("image"):
                 img = Image.open(io.BytesIO(data))
                 display_content.append({"type": "image", "data": img, "caption": f.name})
-                api_payload.append(img)   # 新版 SDK 直接传 PIL.Image
+                api_payload.append(img)
             else:
                 text = data.decode("utf-8", errors="ignore")
-                api_payload.append(f"文件 `{f.name}` 内容：\n\n{text}")
                 display_content.append({"type": "file", "name": f.name, "data": text})
+                api_payload.append(f"文件 `{f.name}` 内容：\n\n{text}")
 
-    # --- 文本处理 ---
+    # ------ 文本处理 ------
     if user_input:
-        api_payload.append(user_input)
         display_content.append({"type": "text", "data": user_input})
+        api_payload.append(user_input)
 
-    # 保存并展示用户消息
-    st.session_state.messages.append({"role": "user", "content": display_content})
+    # 保存用户消息
+    st.session_state.messages.append({
+        "role": "user",
+        "content": display_content
+    })
 
+    # 展示用户消息
     with st.chat_message("user"):
         for part in display_content:
             if part["type"] == "text":
@@ -107,7 +107,6 @@ if user_input or uploaded_files:
                 st.image(part["data"], width=200)
             elif part["type"] == "file":
                 st.info(f"📄 文件: {part['name']}")
-
 
     # ----------------- AI 回复 -----------------
     with st.chat_message("assistant"):
@@ -115,103 +114,10 @@ if user_input or uploaded_files:
         full_text = ""
 
         try:
-            # --- 正确的流式 API（你当前版本支持的） ---
+            # 正确的流式 API（适配 google-genai）
             stream = client.models.generate_content_stream(
                 model=selected_model,
                 contents=api_payload,
-            )
-
-            for chunk in stream:
-                if chunk.text:
-                    full_text += chunk.text
-                    placeholder.markdown(full_text + "▌")
-
-            placeholder.markdown(full_text)
-
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": full_text
-            })
-
-        except Exception as e:
-            st.error(f"API 调用失败：{e}")            st.markdown(msg["content"])
-        else:
-            for part in msg["content"]:
-                if part["type"] == "text":
-                    st.markdown(part["data"])
-                elif part["type"] == "image":
-                    st.image(part["data"], caption=part.get("caption"))
-                elif part["type"] == "file":
-                    st.info(f"📄 文件: {part['name']}")
-
-# Stop if no key
-if not api_key:
-    st.info("👈 请在左侧输入 API Key")
-    st.chat_input("请先输入 API Key", disabled=True)
-    st.stop()
-
-# Create client
-client = genai.Client(api_key=api_key)
-
-# ---------------- File uploads + chat input ----------------
-uploaded_files = st.file_uploader(
-    "✨ 上传附件（不会自动发送，直到你按回车）",
-    accept_multiple_files=True,
-    type=['jpg', 'jpeg', 'png', 'gif', 'txt', 'md', 'json', 'py']
-)
-
-user_input = st.chat_input("请输入你的内容...")
-
-# ---------------- Handle user message ----------------
-if user_input or uploaded_files:
-
-    display_content = []
-    api_payload = []
-
-    # 文件处理
-    if uploaded_files:
-        for f in uploaded_files:
-            bytes_data = f.getvalue()
-
-            if f.type.startswith("image"):
-                img = Image.open(io.BytesIO(bytes_data))
-                # 直接传 PIL.Image，google-genai 会自动处理
-                api_payload.append(img)
-                display_content.append({"type": "image", "data": img, "caption": f.name})
-            else:
-                text = bytes_data.decode("utf-8", errors="ignore")
-                api_payload.append(f"文件 `{f.name}` 内容：\n\n{text}")
-                display_content.append({"type": "file", "name": f.name, "data": text})
-
-    # 文本部分
-    if user_input:
-        api_payload.append(user_input)
-        display_content.append({"type": "text", "data": user_input})
-
-    # 保存用户消息
-    st.session_state.messages.append({"role": "user", "content": display_content})
-
-    # 显示用户消息
-    with st.chat_message("user"):
-        for part in display_content:
-            if part["type"] == "text":
-                st.markdown(part["data"])
-            elif part["type"] == "image":
-                st.image(part["data"], width=200)
-            elif part["type"] == "file":
-                st.info(f"📄 文件: {part['name']}")
-
-    # ---------------- AI 回复 ----------------
-    with st.chat_message("assistant"):
-        placeholder = st.empty()
-        full_text = ""
-
-        try:
-            # 流式输出
-            stream = client.models.generate_content(
-                model=selected_model,
-                contents=api_payload,
-                stream=True,
             )
 
             for chunk in stream:
