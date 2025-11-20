@@ -1,19 +1,3 @@
-import streamlit as st
-from google.generativeai import GenerativeModel, configure
-import PIL.Image
-import io
-
-# ---------------- 页面配置 ----------------
-st.set_page_config(
-    page_title="Gemini AI 多模态聊天",
-    page_icon="🤖",
-    layout="wide"
-)
-
-st.title("🤖 Gemini AI 多模态聊天助手")
-st.caption("基于 Google Gemini API，支持文本、图片和代码文件输入")
-
-# ---------------- 侧边栏配置 ----------------
 with st.sidebar:
     st.header("🔧 配置")
 
@@ -32,9 +16,12 @@ with st.sidebar:
         "gemini-pro-vision",
         "gemini-pro"
     ]
+
     selected_model = st.selectbox("选择模型", models, index=0)
 
     if st.button("🗑️ 清空聊天记录"):
+        st.session_state.messages = []
+        st.rerun()    if st.button("🗑️ 清空聊天记录"):
         st.session_state.messages = []
         st.rerun()
 
