@@ -3,6 +3,16 @@ import base64
 from google.generativeai import GenerativeModel, configure
 
 # ------------------------------
+# 先初始化 session_state（必须在 UI 组件之前）
+# ------------------------------
+if "messages" not in st.session_state:
+    st.session_state["messages"] = []
+
+if "pending_attachments" not in st.session_state:
+    # 每项为 dict: {name: str, data: bytes or None, type: str or None, size: int or None}
+    st.session_state["pending_attachments"] = []
+
+# ------------------------------
 # 页面 & 侧边栏
 # ------------------------------
 st.set_page_config(page_title="Gemini AI 聊天", page_icon="🤖", layout="wide")
@@ -30,20 +40,12 @@ with st.sidebar:
     )
     st.caption("关闭则仅保存文件名作为元数据；开启会把文件 base64 一并发送（注意隐私与大小）")
 
+    # 清空聊天记录：用赋空替代 pop，确保键存在且行为可预期
     if st.button("🗑️ 清空聊天记录"):
-        st.session_state.pop("messages", None)
-        st.session_state.pop("pending_attachments", None)
+        st.session_state["messages"] = []
+        st.session_state["pending_attachments"] = []
+        # 触发页面重载（放在按钮处理内是安全的）
         st.experimental_rerun()
-
-# ------------------------------
-# 初始化 session_state
-# ------------------------------
-if "messages" not in st.session_state:
-    st.session_state["messages"] = []
-
-if "pending_attachments" not in st.session_state:
-    # 每项为 dict: {name: str, data: bytes or None, type: str or None, size: int or None}
-    st.session_state["pending_attachments"] = []
 
 # ------------------------------
 # 显示历史消息
@@ -72,37 +74,28 @@ st.markdown("---")
 # ------------------------------
 # 浮动 📎 附件上传（file_uploader，但样式成图标）
 # ------------------------------
-# 真实上传控件（负责接收文件），但我们用 CSS 把默认区域隐藏，并绘制一个圆形 📎 图标
 files = st.file_uploader("", accept_multiple_files=True, key="floating_uploader", label_visibility="collapsed")
 
-# CSS：把 file_uploader 定位到右下，显示圆形图标（📎），并让 input[type=file] 覆盖图标以接收点击
 st.markdown(
     """
     <style>
-    /* 定位 file_uploader 容器（靠近 chat_input 的位置） */
     div[data-testid="stFileUploader"] {
         position: fixed;
-        right: 160px;   /* 根据需要调整水平位置 */
-        bottom: 92px;   /* 根据需要调整垂直位置（使图标靠近发送按钮） */
+        right: 160px;
+        bottom: 92px;
         z-index: 9999;
         width: 48px;
         height: 48px;
         padding: 0;
         overflow: visible;
     }
-
-    /* 隐藏默认文本/label */
     div[data-testid="stFileUploader"] > label { display: none !important; }
-
-    /* 隐藏默认 drop 区视觉元素，但保留 input 元素以接收文件 */
     div[data-testid="stFileUploader"] > div {
         padding: 0 !important;
         margin: 0 !important;
         height: 0px !important;
         overflow: visible !important;
     }
-
-    /* 绘制圆形图标（伪元素），作为可见的点击目标 */
     div[data-testid="stFileUploader"]::before {
         content: "📎";
         display: flex;
@@ -118,10 +111,8 @@ st.markdown(
         right: 0;
         bottom: 0;
         z-index: 900;
-        pointer-events: none; /* 让下面透明 input 捕获点击 */
+        pointer-events: none;
     }
-
-    /* 使真实的 input[type=file] 覆盖在图标上方以接收点击，且不可见 */
     div[data-testid="stFileUploader"] input[type="file"] {
         opacity: 0;
         width: 48px;
@@ -132,9 +123,7 @@ st.markdown(
         z-index: 1000;
         cursor: pointer;
     }
-
-    /* 移除额外文本（不同 streamlit 版本可能生成不同层级，尽量隐藏） */
-    div[data-testid="stFileUploader"] span, 
+    div[data-testid="stFileUploader"] span,
     div[data-testid="stFileUploader"] p {
         display: none !important;
     }
@@ -174,9 +163,10 @@ if st.session_state["pending_attachments"]:
         st.session_state["pending_attachments"] = []
 
 # ------------------------------
-# 聊天输入（**仅此一个** st.chat_input —— 避免重复 ID）
+# 聊天输入（**仅此一个** st.chat_input —— 避免 DuplicateElementId）
 # ------------------------------
 if api_key:
+    # 仅在有 api_key 时配置并实例化 model
     configure(api_key=api_key)
     model = GenerativeModel(selected_model)
 
@@ -213,6 +203,7 @@ if api_key:
             placeholder = st.empty()
             full = ""
             try:
+                # 有些版本的 SDK 不支持 stream kw；这里用 try/except 回退到同步
                 response = model.generate_content(user_input, stream=True)
                 try:
                     for chunk in response:
@@ -228,6 +219,7 @@ if api_key:
                             placeholder.markdown(full + "▌")
                     placeholder.markdown(full)
                 except TypeError:
+                    # stream 返回不可迭代或 SDK 不同返回结构，抛到外层同步获取
                     raise Exception("stream returned non-iterable")
             except Exception:
                 try:
@@ -260,227 +252,4 @@ if api_key:
             })
 else:
     # 只有提示信息，没有第二个 chat_input（避免 DuplicateElementId）
-    st.info("请在侧边栏输入 Gemini API Key 以开始聊天")
-        value="AIzaSyD0HjQ57wfOtNxbbWqAlAIeRaQueZ9TjPk"
-    )
-    st.caption("示例：请务必不要在公共环境长期暴露你的 Key")
-
-    models = [
-        "gemini-2.5-pro",
-        "gemini-2.5-pro-latest",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash",
-        "gemini-pro"
-    ]
-    selected_model = st.selectbox("选择模型", models, index=0)
-
-    st.write("---")
-    send_file_contents = st.checkbox(
-        "发送文件内容给 Gemini（base64）",
-        value=False
-    )
-    st.caption("默认关闭：仅保留文件名作为元数据")
-
-    # 清空聊天记录（不要调用 experimental_rerun — 点击后页面会自动重新执行）
-    if st.button("🗑️ 清空聊天记录"):
-        st.session_state.pop("messages", None)
-        st.session_state.pop("pending_attachments", None)
-        st.success("已清空聊天记录")
-
-# ------------------------------
-# 初始化 session_state
-# ------------------------------
-if "messages" not in st.session_state:
-    st.session_state["messages"] = []
-if "pending_attachments" not in st.session_state:
-    st.session_state["pending_attachments"] = []  # 每项为 dict {name,data,type,size}
-
-# ------------------------------
-# 显示历史消息
-# ------------------------------
-for i, msg in enumerate(st.session_state["messages"]):
-    with st.chat_message(msg["role"]):
-        st.markdown(msg.get("content", ""))
-        atts = msg.get("attachments", [])
-        if atts:
-            st.markdown("**附件：**")
-            for j, a in enumerate(atts):
-                name = a.get("name")
-                data = a.get("data")
-                if data:
-                    st.download_button(
-                        label=f"下载 {name}",
-                        data=data,
-                        file_name=name,
-                        key=f"dl_{i}_{j}_{name}"
-                    )
-                else:
-                    st.markdown(f"- {name}")
-
-st.markdown("---")
-
-# ------------------------------
-# 单一 file_uploader（唯一 key：'main_uploader'）
-# - 通过 CSS 使其看起来像浮动 📎 图标
-# - 重要：只能存在这一个 uploader，避免 DuplicateElementKey
-# ------------------------------
-files = st.file_uploader(
-    label="", 
-    accept_multiple_files=True, 
-    key="main_uploader", 
-    label_visibility="collapsed"
-)
-
-st.markdown(
-    """
-    <style>
-    /* 调整 uploader 的位置与样式（可按需微调 right/bottom） */
-    div[data-testid="stFileUploader"] {
-        position: fixed;
-        right: 160px;
-        bottom: 92px;
-        z-index: 9999;
-        width: 48px;
-        height: 48px;
-        padding: 0;
-    }
-    div[data-testid="stFileUploader"] > label { display: none !important; }
-    div[data-testid="stFileUploader"] > div { height: 0 !important; overflow: visible !important; }
-    div[data-testid="stFileUploader"]::before {
-        content: "📎";
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 48px;
-        height: 48px;
-        border-radius: 50%;
-        background: #ffffff;
-        box-shadow: 0 6px 18px rgba(0,0,0,0.12);
-        font-size: 22px;
-        position: absolute;
-        right: 0;
-        bottom: 0;
-        pointer-events: none;
-    }
-    div[data-testid="stFileUploader"] input[type="file"] {
-        opacity: 0;
-        width: 48px;
-        height: 48px;
-        position: absolute;
-        right: 0;
-        bottom: 0;
-        z-index: 1000;
-        cursor: pointer;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-# 处理新选文件并存入 pending_attachments（避免重复）
-if files:
-    selected = files if isinstance(files, list) else [files]
-    added = []
-    for f in selected:
-        try:
-            b = f.read()
-        except Exception:
-            b = None
-        fingerprint = (f.name, len(b) if b is not None else -1)
-        exists = any((p.get("name"), p.get("size")) == fingerprint for p in st.session_state["pending_attachments"])
-        if not exists:
-            st.session_state["pending_attachments"].append({
-                "name": f.name,
-                "data": b,
-                "type": getattr(f, "type", None),
-                "size": len(b) if b is not None else None
-            })
-            added.append(f.name)
-    if added:
-        st.success(f"已添加附件: {', '.join(added)}")
-
-# 显示 pending attachments 并允许清除
-if st.session_state["pending_attachments"]:
-    cols = st.columns([0.9, 0.1])
-    pending_names = ", ".join([p["name"] for p in st.session_state["pending_attachments"]])
-    cols[0].markdown(f"**待发送附件：** {pending_names}")
-    if cols[1].button("✖ 清除附件"):
-        st.session_state["pending_attachments"] = []
-
-# ------------------------------
-# 唯一 chat_input（仅此一个，防止 DuplicateElementId）
-# ------------------------------
-if api_key:
-    try:
-        configure(api_key=api_key)
-        model = GenerativeModel(selected_model)
-    except Exception:
-        st.error("API Key 配置失败，请检查 Key 或网络/SDK 是否正确")
-
-    user_input = st.chat_input("请输入你的问题...")
-    if user_input:
-        # 构造附件元数据（保留 bytes 以便回放下载；可选把 base64 发给模型）
-        attachments_payload = []
-        for att in st.session_state.get("pending_attachments", []):
-            item = {"name": att["name"], "data": att.get("data")}
-            if send_file_contents and att.get("data") is not None:
-                item["data_base64"] = base64.b64encode(att["data"]).decode("utf-8")
-                item["size"] = att.get("size")
-                item["type"] = att.get("type")
-            attachments_payload.append(item)
-
-        st.session_state["messages"].append({
-            "role": "user",
-            "content": user_input,
-            "attachments": attachments_payload
-        })
-        with st.chat_message("user"):
-            disp = user_input
-            if attachments_payload:
-                disp += "\n\n**附件:** " + ", ".join(a["name"] for a in attachments_payload)
-            st.markdown(disp)
-
-        # 清除 pending（已随消息保存）
-        st.session_state["pending_attachments"] = []
-
-        # 调用 Gemini（流式优先）
-        with st.chat_message("assistant"):
-            placeholder = st.empty()
-            full = ""
-            try:
-                response = model.generate_content(user_input, stream=True)
-                try:
-                    for chunk in response:
-                        text_piece = None
-                        if hasattr(chunk, "text"):
-                            text_piece = getattr(chunk, "text")
-                        elif isinstance(chunk, dict):
-                            text_piece = chunk.get("text") or chunk.get("output_text")
-                        else:
-                            text_piece = str(chunk)
-                        if text_piece:
-                            full += text_piece
-                            placeholder.markdown(full + "▌")
-                    placeholder.markdown(full)
-                except TypeError:
-                    raise Exception("stream returned non-iterable")
-            except Exception:
-                try:
-                    response = model.generate_content(user_input)
-                    text = None
-                    if hasattr(response, "text"):
-                        text = getattr(response, "text")
-                    elif isinstance(response, dict):
-                        text = response.get("text") or response.get("output_text")
-                    if not text:
-                        text = str(response)
-                    full = text
-                    placeholder.markdown(full)
-                except Exception as e:
-                    st.error(f"调用 Gemini 出错：{e}")
-                    full = "[错误：无法获得模型响应]"
-
-            st.session_state["messages"].append({"role": "assistant", "content": full})
-else:
-    # 只有提示信息，没有第二个 chat_input（避免重复 ID）
     st.info("请在侧边栏输入 Gemini API Key 以开始聊天")
