@@ -525,7 +525,8 @@ if api_key:
             })
 else:
     # 只有提示信息，没有第二个 chat_input（避免 DuplicateElementId）
-    st.info("请在侧边栏输入 Gemini API Key 以开始聊天")    send_file_contents = st.checkbox(
+    st.info("请在侧边栏输入 Gemini API Key 以开始聊天")    
+    send_file_contents = st.checkbox(
         "发送文件内容给 Gemini（将把小文件 base64 编码随消息发送）",
         value=False
     )
