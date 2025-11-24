@@ -7,7 +7,7 @@ from google.generativeai import GenerativeModel, configure
 # ------------------------------
 st.set_page_config(page_title="Gemini AI 聊天", page_icon="🤖", layout="wide")
 st.title("🤖 Gemini AI 聊天助手")
-st.caption("保留 chat_input（置底 + 自动高度），右侧浮动“添加附件”按钮 — 上传不自动发送")
+st.caption("保留 chat_input（置底 + 自动高度），右下角浮动 📎 附件按钮 — 上传不自动发送")
 
 with st.sidebar:
     st.header("🔧 配置")
@@ -70,25 +70,74 @@ for i, msg in enumerate(st.session_state["messages"]):
 st.markdown("---")
 
 # ------------------------------
-# 浮动附件上传（file_uploader）—— 视觉上靠近 chat_input
+# 浮动 📎 附件上传（file_uploader，但样式成图标）
 # ------------------------------
-# 这个 file_uploader 始终存在（但不会自动发送）
+# 真实上传控件（负责接收文件），但我们用 CSS 把默认区域隐藏，并绘制一个圆形 📎 图标
 files = st.file_uploader("", accept_multiple_files=True, key="floating_uploader", label_visibility="collapsed")
 
-# 调整位置：如需微调，请改 right/bottom 数值
+# CSS：把 file_uploader 定位到右下，显示圆形图标（📎），并让 input[type=file] 覆盖图标以接收点击
 st.markdown(
     """
     <style>
+    /* 定位 file_uploader 容器（靠近 chat_input 的位置） */
     div[data-testid="stFileUploader"] {
         position: fixed;
-        right: 160px;
-        bottom: 92px;
+        right: 160px;   /* 根据需要调整水平位置 */
+        bottom: 92px;   /* 根据需要调整垂直位置（使图标靠近发送按钮） */
         z-index: 9999;
-        width: 44px;
-        height: 44px;
+        width: 48px;
+        height: 48px;
+        padding: 0;
         overflow: visible;
     }
-    div[data-testid="stFileUploader"] > label { display:none; }
+
+    /* 隐藏默认文本/label */
+    div[data-testid="stFileUploader"] > label { display: none !important; }
+
+    /* 隐藏默认 drop 区视觉元素，但保留 input 元素以接收文件 */
+    div[data-testid="stFileUploader"] > div {
+        padding: 0 !important;
+        margin: 0 !important;
+        height: 0px !important;
+        overflow: visible !important;
+    }
+
+    /* 绘制圆形图标（伪元素），作为可见的点击目标 */
+    div[data-testid="stFileUploader"]::before {
+        content: "📎";
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        background: #ffffff;
+        box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+        font-size: 22px;
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        z-index: 900;
+        pointer-events: none; /* 让下面透明 input 捕获点击 */
+    }
+
+    /* 使真实的 input[type=file] 覆盖在图标上方以接收点击，且不可见 */
+    div[data-testid="stFileUploader"] input[type="file"] {
+        opacity: 0;
+        width: 48px;
+        height: 48px;
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        z-index: 1000;
+        cursor: pointer;
+    }
+
+    /* 移除额外文本（不同 streamlit 版本可能生成不同层级，尽量隐藏） */
+    div[data-testid="stFileUploader"] span, 
+    div[data-testid="stFileUploader"] p {
+        display: none !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -137,13 +186,10 @@ if api_key:
         attachments_payload = []
         for att in st.session_state.get("pending_attachments", []):
             item = {"name": att["name"]}
-            # 若用户勾选发送文件内容，则包含 base64 字符串（也把原 bytes 保存在会话以便 download）
             if send_file_contents and att.get("data") is not None:
-                # 以 base64 发送给模型（注意：这会增加请求体大小）
                 item["data_base64"] = base64.b64encode(att["data"]).decode("utf-8")
                 item["size"] = att.get("size")
                 item["type"] = att.get("type")
-            # 同时保留 bytes 用于回放下载（不会随 API 请求自动发送，除非你实现）
             item["data"] = att.get("data")
             attachments_payload.append(item)
 
@@ -167,13 +213,10 @@ if api_key:
             placeholder = st.empty()
             full = ""
             try:
-                # 尝试流式（若 SDK 支持）
                 response = model.generate_content(user_input, stream=True)
-                # 若可迭代则作为流处理
                 try:
                     for chunk in response:
                         text_piece = None
-                        # 多种 chunk 结构兼容处理
                         if hasattr(chunk, "text"):
                             text_piece = getattr(chunk, "text")
                         elif isinstance(chunk, dict):
@@ -185,10 +228,8 @@ if api_key:
                             placeholder.markdown(full + "▌")
                     placeholder.markdown(full)
                 except TypeError:
-                    # 非可迭代的 stream 返回 -> 回退到下面的非流式逻辑
                     raise Exception("stream returned non-iterable")
             except Exception:
-                # 非流式回退
                 try:
                     response = model.generate_content(user_input)
                     text = None
