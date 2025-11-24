@@ -1,15 +1,17 @@
-# app.py — 完整、已修正版本（确保所有 widget 都有唯一 key）
+# app.py
 import streamlit as st
+import streamlit.components.v1 as components
 import base64
+import json
 from google.generativeai import GenerativeModel, configure
 
 # ------------------------------
-# 页面配置（必须最先调用）
+# 页面配置（尽早调用）
 # ------------------------------
 st.set_page_config(page_title="Gemini AI 聊天", page_icon="🤖", layout="wide")
 
 # ------------------------------
-# 兼容性：安全重载（支持旧版和新版 Streamlit）
+# 兼容性：安全重载（支持 st.rerun 与 st.experimental_rerun）
 # ------------------------------
 def safe_rerun():
     if hasattr(st, "rerun"):
@@ -24,8 +26,54 @@ def safe_rerun():
             return
         except Exception:
             pass
-    # 无法自动刷新时给用户提示（不抛异常）
     st.warning("无法自动刷新页面，请手动刷新浏览器以应用更改。")
+
+# ------------------------------
+# localStorage 交互：读取与写入封装（通过 components.html 执行 JS）
+# ------------------------------
+def read_localstorage_once(key: str, comp_key: str):
+    """
+    通过 components.html 读取 localStorage[key]，并返回 Python 中的值（字符串或 None）。
+    comp_key 用来保证 components 的唯一性。
+    """
+    js = f"""
+    <script>
+    (function() {{
+        const v = localStorage.getItem({json.dumps(key)});
+        // 将值发送回 Python，作为 components.html 的返回值
+        window.parent.postMessage({{isStreamlitMessage: true, value: v}}, "*");
+    }})();
+    </script>
+    """
+    try:
+        val = components.html(js, height=0, key=comp_key)
+    except Exception:
+        # 某些环境可能抛异常，返回 None 表示无法读取
+        val = None
+    return val
+
+def write_localstorage(key: str, value: str, comp_key: str):
+    """
+    将 value（字符串）写入 localStorage[key]。value 必须是字符串（JSON string 推荐）。
+    """
+    # value 已经是 Python 字符串，我们需要在 JS 源中作为字面量插入 -> 使用 json.dumps 安全转义
+    js_value = json.dumps(value)
+    js = f"""
+    <script>
+    (function() {{
+        try {{
+            localStorage.setItem({json.dumps(key)}, {js_value});
+            window.parent.postMessage({{isStreamlitMessage: true, value: "OK"}}, "*");
+        }} catch(e) {{
+            window.parent.postMessage({{isStreamlitMessage: true, value: "ERR"}}, "*");
+        }}
+    }})();
+    </script>
+    """
+    try:
+        components.html(js, height=0, key=comp_key)
+    except Exception:
+        pass
 
 # ------------------------------
 # 初始化 session_state（尽早）
@@ -36,19 +84,48 @@ if "messages" not in st.session_state:
 if "pending_attachments" not in st.session_state:
     st.session_state["pending_attachments"] = []
 
+# 标记：是否已经从 localStorage 恢复过（避免重复覆盖用户操作）
+if "local_restored" not in st.session_state:
+    st.session_state["local_restored"] = False
+
 # ------------------------------
-# 页面主标题与说明（只渲染一次）
+# 首次加载：尝试从 localStorage 恢复 api key 与 聊天记录
+# ------------------------------
+if not st.session_state["local_restored"]:
+    # 读取 API Key（原样字符串）
+    api_key_from_local = read_localstorage_once("gemini_api", comp_key="read_api_key")
+    if api_key_from_local:
+        # components.html 返回字符串或 JSON 字符串；localStorage 存储时我们存入原始字符串（password），因此直接赋值
+        st.session_state["api_key_local"] = api_key_from_local
+    else:
+        st.session_state["api_key_local"] = ""
+
+    # 读取历史聊天：localStorage 中我们保存为 JSON 字符串（列表），如果存在则解析
+    history_raw = read_localstorage_once("gemini_history", comp_key="read_history")
+    if history_raw:
+        try:
+            parsed = json.loads(history_raw)
+            # 只在 session 为空时恢复（避免覆盖已存在对话）
+            if not st.session_state["messages"]:
+                st.session_state["messages"] = parsed if isinstance(parsed, list) else []
+        except Exception:
+            # 如果解析失败就忽略
+            pass
+
+    st.session_state["local_restored"] = True
+
+# ------------------------------
+# 页面头与侧边栏（所有 widget 明确 key）
 # ------------------------------
 st.title("🤖 Gemini AI 聊天助手")
 st.caption("保留 chat_input（置底 + 自动高度），右下角浮动 📎 附件按钮 — 上传不自动发送")
 
-# ------------------------------
-# 侧边栏（所有控件都带 key，避免重复 id）
-# ------------------------------
 with st.sidebar:
     st.header("🔧 配置")
-    api_key = st.text_input("请输入你的 Google Gemini API Key", type="password", key="api_key_input")
-    st.caption("API Key 可从 Google AI Studio 获取")
+    # 将恢复到 input 的默认值（优先使用 session_state 中恢复的 api_key_local）
+    api_key_default = st.session_state.get("api_key_local", "")
+    api_key = st.text_input("请输入你的 Google Gemini API Key", type="password", value=api_key_default, key="api_key_input")
+    st.caption("API Key 可从 Google AI Studio 获取（此项仅保存在你的浏览器 localStorage，不会上传服务器）")
 
     models = [
         "gemini-2.5-pro",
@@ -67,17 +144,36 @@ with st.sidebar:
     )
     st.caption("关闭则仅保存文件名作为元数据；开启会把文件 base64 一并发送（注意隐私与大小）")
 
-    # 清空聊天记录（使用唯一 key）
-    if st.button("🗑️ 清空聊天记录", key="clear_chat_btn"):
+    # 清空聊天记录并清本地 localStorage 的按钮（提示确认）
+    if st.button("🗑️ 清空聊天记录（同时清除本地缓存）", key="clear_all"):
         st.session_state["messages"] = []
         st.session_state["pending_attachments"] = []
+        # 清除 localStorage 中的数据
+        write_localstorage("gemini_history", "[]", comp_key="clear_history_js")
+        write_localstorage("gemini_api", "", comp_key="clear_api_js")
+        # 触发刷新
         safe_rerun()
 
+    # 仅清空本地缓存（不清应用内 session）
+    if st.button("🧹 清除浏览器本地缓存（保留当前页面对话）", key="clear_local_only"):
+        write_localstorage("gemini_history", "[]", comp_key="clear_history_js2")
+        write_localstorage("gemini_api", "", comp_key="clear_api_js2")
+        st.success("浏览器 localStorage 已清除（刷新后将不会恢复先前的历史）")
+
 # ------------------------------
-# 渲染历史消息（从 session_state）
+# 如果 API Key 发生变化，写回 localStorage（保持本地持久化）
+# ------------------------------
+# 我们把 api_key 保存到 session_state 便于比较和避免重复写入
+prev_saved_api = st.session_state.get("api_key_saved", "")
+if api_key != prev_saved_api:
+    # 保存到 localStorage（写入原始字符串）
+    write_localstorage("gemini_api", api_key, comp_key=f"save_api_{hash(api_key) % 100000}")
+    st.session_state["api_key_saved"] = api_key
+
+# ------------------------------
+# 渲染历史消息（来自 session_state["messages"]）
 # ------------------------------
 for i, msg in enumerate(st.session_state["messages"]):
-    # msg["role"] 应为 "user" 或 "assistant"
     role = msg.get("role", "assistant")
     with st.chat_message(role):
         st.markdown(msg.get("content", ""))
@@ -87,7 +183,6 @@ for i, msg in enumerate(st.session_state["messages"]):
             for j, att in enumerate(attachments):
                 name = att.get("name")
                 data = att.get("data")  # bytes or None
-                # 下载按钮也要 unique key（含索引）
                 if data:
                     st.download_button(
                         label=f"下载 {name}",
@@ -96,17 +191,16 @@ for i, msg in enumerate(st.session_state["messages"]):
                         key=f"dl_{i}_{j}_{name}"
                     )
                 else:
-                    # 仅显示文件名（没有内容）
                     st.markdown(f"- {name}")
 
 st.markdown("---")
 
 # ------------------------------
-# 浮动 📎 附件上传（file_uploader），显式 key 避免冲突
+# 浮动附件上传（file_uploader），显式 key 避免重复 id
 # ------------------------------
 files = st.file_uploader("", accept_multiple_files=True, key="floating_uploader", label_visibility="collapsed")
 
-# CSS：把 file_uploader 定位成浮动图标（与原先相同）
+# CSS：浮动图标样式
 st.markdown(
     """
     <style>
@@ -163,7 +257,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# 把新上传的文件去重后存入 session_state["pending_attachments"]
+# 保存上传的文件到 pending_attachments（去重）
 if files:
     selected = files if isinstance(files, list) else [files]
     added = []
@@ -185,7 +279,7 @@ if files:
     if added:
         st.success(f"已添加附件: {', '.join(added)}", icon="📎")
 
-# 显示待发送附件，并提供清除按钮（按钮带 key）
+# 显示 pending attachments 并支持清除
 if st.session_state["pending_attachments"]:
     cols = st.columns([0.88, 0.12])
     pending_names = ", ".join([p["name"] for p in st.session_state["pending_attachments"]])
@@ -193,11 +287,13 @@ if st.session_state["pending_attachments"]:
     if cols[1].button("✖ 清除附件", key="clear_pending_btn"):
         st.session_state["pending_attachments"] = []
 
+st.markdown("---")
+
 # ------------------------------
 # 聊天输入（唯一 st.chat_input，带 key）
 # ------------------------------
 if api_key:
-    # 配置并实例化模型（包裹异常防止 SDK 崩溃）
+    # 初始化模型（捕获异常以防 SDK 错误）
     try:
         configure(api_key=api_key)
         model = GenerativeModel(selected_model)
@@ -207,7 +303,7 @@ if api_key:
 
     user_input = st.chat_input("请输入你的问题...", key="main_chat_input")
     if user_input:
-        # 构造附件元数据（可选择把内容做 base64）
+        # 构造附件 payload（含 base64 可选）
         attachments_payload = []
         for att in st.session_state.get("pending_attachments", []):
             item = {"name": att["name"]}
@@ -215,7 +311,6 @@ if api_key:
                 item["data_base64"] = base64.b64encode(att["data"]).decode("utf-8")
                 item["size"] = att.get("size")
                 item["type"] = att.get("type")
-            # 同时保留 bytes 以便后续下载
             item["data"] = att.get("data")
             attachments_payload.append(item)
 
@@ -231,10 +326,17 @@ if api_key:
                 disp += "\n\n**附件:** " + ", ".join(a["name"] for a in attachments_payload)
             st.markdown(disp)
 
-        # 清空 pending 附件（已随消息保存）
+        # 清空 pending attachments（已经随消息保存）
         st.session_state["pending_attachments"] = []
 
-        # 调用模型：优先尝试流式，失败回退到同步
+        # 立刻把最新聊天记录写回 localStorage（以 JSON 字符串形式）
+        try:
+            history_json = json.dumps(st.session_state["messages"], ensure_ascii=False)
+            write_localstorage("gemini_history", history_json, comp_key=f"save_history_{hash(history_json) % 100000}")
+        except Exception:
+            pass
+
+        # 调用 Gemini：优先流式，失败回退同步
         with st.chat_message("assistant"):
             placeholder = st.empty()
             full = ""
@@ -243,11 +345,9 @@ if api_key:
                 full = "[错误：模型未初始化]"
             else:
                 try:
-                    # 有的 SDK 版本支持 stream=True，有的则不支持
                     response = model.generate_content(user_input, stream=True)
                     try:
                         for chunk in response:
-                            # 支持多种 chunk 结构
                             text_piece = None
                             if hasattr(chunk, "text"):
                                 text_piece = getattr(chunk, "text")
@@ -260,10 +360,8 @@ if api_key:
                                 placeholder.markdown(full + "▌")
                         placeholder.markdown(full)
                     except TypeError:
-                        # 非迭代型 stream 返回 -> 触发同步回退
                         raise Exception("stream returned non-iterable")
                 except Exception:
-                    # 回退到同步模式，并尽力解析响应结构
                     try:
                         response = model.generate_content(user_input)
                         text = None
@@ -287,11 +385,48 @@ if api_key:
                         st.error(f"调用 Gemini 出错：{e}")
                         full = "[错误：无法获得模型响应]"
 
-            # 把 assistant 响应写入 session_state
+            # 保存 assistant 响应到 session_state
             st.session_state["messages"].append({
                 "role": "assistant",
                 "content": full
             })
+
+            # 保存回 localStorage（确保 assistant 回复也持久化）
+            try:
+                history_json = json.dumps(st.session_state["messages"], ensure_ascii=False)
+                write_localstorage("gemini_history", history_json, comp_key=f"save_history_after_{hash(history_json) % 100000}")
+            except Exception:
+                pass
+
 else:
-    # 没有 API Key 时只显示引导信息（此处不会创建第二个 text_input）
+    # 未输入 API Key 时显示引导（不创建重复控件）
     st.info("请在侧边栏输入 Gemini API Key 以开始聊天", icon="ℹ️")
+
+# ------------------------------
+# 额外：提供导出/导入聊天记录（JSON）
+# ------------------------------
+cols = st.columns([0.7, 0.3])
+with cols[0]:
+    if st.button("📤 导出聊天记录为 JSON", key="export_json"):
+        try:
+            out_json = json.dumps(st.session_state["messages"], ensure_ascii=False, indent=2)
+            st.download_button("下载聊天记录（JSON）", data=out_json.encode("utf-8"), file_name="gemini_history.json", mime="application/json", key="download_history")
+        except Exception as e:
+            st.error(f"导出失败：{e}")
+
+with cols[1]:
+    uploaded = st.file_uploader("📥 导入聊天记录（JSON）", type=["json"], key="import_history")
+    if uploaded is not None:
+        try:
+            raw = uploaded.read().decode("utf-8")
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                st.session_state["messages"] = parsed
+                # 保存到 localStorage
+                write_localstorage("gemini_history", json.dumps(parsed, ensure_ascii=False), comp_key="import_save_history")
+                st.success("已导入聊天记录并保存到本地缓存。")
+                safe_rerun()
+            else:
+                st.error("导入文件格式不正确：应为消息对象数组（list）")
+        except Exception as e:
+            st.error(f"导入失败：{e}")
