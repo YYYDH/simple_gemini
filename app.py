@@ -165,6 +165,137 @@ if user_input:
     st.session_state.messages.append({"role": "assistant", "content": bot_reply})
 
     with st.chat_message("assistant"):
+        st.markdown(bot_reply)# -------------------------------------------------------------
+default_api = "AIzaSyD0HjQ57wfOtNxbbWqAlAIeRaQueZ9TjPk"
+api_key = st.sidebar.text_input("请输入你的 Google Gemini API Key", value=default_api, type="password")
+
+if not api_key:
+    st.warning("请在侧边栏输入 API Key 以开始聊天")
+    st.stop()
+
+configure(api_key=api_key)
+
+# -------------------------------------------------------------
+# 选择模型
+# -------------------------------------------------------------
+model_name = st.sidebar.selectbox("选择模型", ["gemini-2.0-flash", "gemini-2.0-pro"])
+model = GenerativeModel(model_name)
+
+# -------------------------------------------------------------
+# 文件选项
+# -------------------------------------------------------------
+send_inline = st.sidebar.toggle("发送文件内容（base64）", value=False)
+
+# -------------------------------------------------------------
+# 初始化 session
+# -------------------------------------------------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# -------------------------------------------------------------
+# 聊天记录显示
+# -------------------------------------------------------------
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+# -------------------------------------------------------------
+# 上传文件组件 —— 固定唯一 key，避免重复
+# -------------------------------------------------------------
+# 使用 st.html + input[type=file] 实现“浮动📎按钮”
+
+floating_css = """
+<style>
+#floating-clip {
+    position: fixed;
+    bottom: 82px;
+    right: 20px;
+    z-index: 9999;
+}
+#file-input {
+    display: none;
+}
+#clip-btn {
+    background: white;
+    border-radius: 50%;
+    width: 52px;
+    height: 52px;
+    border: 1px solid #ccc;
+    font-size: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+#clip-btn:hover {
+    background: #f0f0f0;
+}
+</style>
+<div id="floating-clip">
+  <label id="clip-btn" for="file-input">📎</label>
+  <input id="file-input" type="file" multiple />
+</div>
+<script>
+const fileInput = window.parent.document.querySelector('#file-input');
+fileInput.addEventListener('change', (event) => {
+    const files = event.target.files;
+    const names = Array.from(files).map(f => f.name);
+    window.parent.postMessage({ type: 'files-selected', files: names }, '*');
+});
+</script>
+"""
+
+st.html(floating_css)
+
+# -------------------------------------------------------------
+# 用于接收前端上传事件
+# 通过 session_state 记录
+# -------------------------------------------------------------
+if "pending_files" not in st.session_state:
+    st.session_state.pending_files = []
+
+# 监听浏览器 postMessage
+msg = st.experimental_get_query_params()
+
+# -------------------------------------------------------------
+# 真实文件上传器（隐藏但必须存在）
+# key 唯一避免重复
+# -------------------------------------------------------------
+files = st.file_uploader("hidden-uploader", accept_multiple_files=True, key="real_uploader", label_visibility="collapsed")
+if files:
+    st.session_state.pending_files = files
+    st.toast(f"已选择 {len(files)} 个文件")
+
+# -------------------------------------------------------------
+# chat_input（置底 + 自动高度）
+# -------------------------------------------------------------
+user_input = st.chat_input("输入消息...")
+
+if user_input:
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.markdown(user_input)
+
+    # 处理附件
+    parts = [user_input]
+    if st.session_state.pending_files:
+        for f in st.session_state.pending_files:
+            if send_inline:
+                b64 = base64.b64encode(f.read()).decode()
+                parts.append(f"文件：{f.name}\nBase64：{b64[:80]}...")
+            else:
+                parts.append(f"文件（仅名称）：{f.name}")
+        st.session_state.pending_files = []
+
+    # 调用 Gemini
+    full_input = "\n".join(parts)
+    response = model.generate_content(full_input)
+
+    bot_reply = response.text
+    st.session_state.messages.append({"role": "assistant", "content": bot_reply})
+
+    with st.chat_message("assistant"):
         st.markdown(bot_reply)        st.success("聊天记录已清空")  # 提示用户
         # 不调用 st.experimental_rerun() —— Streamlit 会在按钮点击后自动重新执行脚本
 
